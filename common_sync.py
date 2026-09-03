@@ -1832,6 +1832,7 @@ def run_migration(name, mongo_uri, mongo_db_name, pg_host, pg_port, pg_database,
 
             refresh_functions = [
                 "refresh_ai_tables()",
+                "refresh_ai_own_stock_position()",
                 "refresh_reg_tables()",
                 "refresh_monthly_summary()",
                 "check_ml_retrain_needed()",
