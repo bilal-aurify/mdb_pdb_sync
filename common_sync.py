@@ -50,7 +50,7 @@ PG_DATABASE = None
 PG_USER     = None
 PG_PASSWORD = None
 
-SYNC_WINDOW_MINUTES = 2880
+SYNC_WINDOW_MINUTES = 180
 BATCH_SIZE          = 500
 LOCK_STALE_SECONDS  = 3600
 EXCLUDE_TABLES      = []
@@ -680,13 +680,23 @@ def sync_collection(
         id_is_int = pg_columns_schema.get("id") in ['integer', 'bigint']
         overrides = FIELD_NAME_OVERRIDES.get(pg_table_name, {})
 
-        if INITIAL_RUN or pg_table_name == "transactions":
+        if INITIAL_RUN:
             mongo_query = {}
         else:
-            timestamp_col = "updated_at" if "updated_at" in pg_columns_schema else ("created_at" if "created_at" in pg_columns_schema else "sync_at")
-            pg_cursor.execute(f'SELECT MAX("{timestamp_col}") FROM "{pg_table_name}";')
+            timestamp_col = "updated_at" if "updated_at" in pg_columns_schema else (
+                "created_at" if "created_at" in pg_columns_schema else "sync_at"
+            )
+
+            pg_cursor.execute(
+                f'SELECT MAX("{timestamp_col}") FROM "{pg_table_name}";'
+            )
             last_sync = pg_cursor.fetchone()[0]
-            mongo_query = {"updatedAt": {"$gte": last_sync}} if last_sync else default_cron_query
+
+            if last_sync:
+                safe_last_sync = last_sync - timedelta(minutes=5)
+                mongo_query = {"updatedAt": {"$gte": safe_last_sync}}
+            else:
+                mongo_query = default_cron_query
 
         mongo_cursor = mongo_db[mongo_collection_name].find(mongo_query)
         all_docs = []
@@ -1217,6 +1227,7 @@ def sync_accounts_custom(mongo_db, pg_conn, default_cron_query):
                 "vat_status": vat_stat,
                 "vat_number": vat_num,
                 "trade_license_number": trade_lic,
+                "status": doc.get("status"),
                 "is_active": doc.get("isActive", True),
                 "is_deleted": doc.get("isDeleted", False),
                 "sync_at": datetime.now(timezone.utc)
@@ -1233,6 +1244,7 @@ def sync_accounts_custom(mongo_db, pg_conn, default_cron_query):
         sql = f'INSERT INTO "accounts" ({columns_str}) VALUES %s ON CONFLICT (id) DO UPDATE SET {update_str};'
         
         batch = [tuple(r.get(c) for c in managed_columns) for r in all_rows]
+        pg_cursor.execute("SET LOCAL app.skip_account_reporting = 'on';")
         execute_values(pg_cursor, sql, batch, page_size=BATCH_SIZE)
         pg_conn.commit()
         logger.info(f"  [accounts] Custom sync finished: {len(all_rows)} records processed.")
