@@ -1314,6 +1314,11 @@ def sync_company_accounts_custom(mongo_db, pg_conn, default_cron_query):
                 "company_email": doc.get("companyEmail"),
                 "company_phone1": doc.get("companyPhone1"),
                 "account_status": doc.get("accountStatus"),
+                "organization_id": to_str_id(doc.get("organizationId")),
+                "branch_id": to_str_id(doc.get("branchId")),
+                "is_party": doc.get("isParty", False),
+                "party_id": to_str_id(doc.get("partyId")),
+                "created_by": to_str_id(doc.get("createdBy")),
                 
                 # Compliance Fixes
                 "kyc_trade_license": trade_lic,
@@ -1855,7 +1860,7 @@ def run_migration(name, mongo_uri, mongo_db_name, pg_host, pg_port, pg_database,
                 "refresh_risk_dashboard_currency_breakdown()",
                 "refresh_party_cancellation_stats()",
                 "refresh_party_branch_org_balances()",
-                "refresh_extended_reporting_tables()"
+                "refresh_extended_reporting_tables()" 
             ]
 
             for fn in refresh_functions:
