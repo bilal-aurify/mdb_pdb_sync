@@ -1276,7 +1276,36 @@ def sync_company_accounts_custom(mongo_db, pg_conn, default_cron_query):
             )
             needs_created_at_backfill = bool(pg_cursor.fetchone()[0])
 
-        mongo_query = {} if (INITIAL_RUN or needs_created_at_backfill) else default_cron_query
+        missing_organization_mongo_ids = []
+        missing_organization_record_count = 0
+        if "organization_id" in pg_columns_schema:
+            pg_cursor.execute(
+                f'''SELECT id FROM "{table_name}"
+                    WHERE organization_id IS NULL AND id IS NOT NULL;'''
+            )
+            missing_organization_rows = pg_cursor.fetchall()
+            missing_organization_record_count = len(missing_organization_rows)
+            for (record_id,) in missing_organization_rows:
+                record_id_str = str(record_id)
+                missing_organization_mongo_ids.append(record_id_str)
+                if ObjectId.is_valid(record_id_str):
+                    missing_organization_mongo_ids.append(ObjectId(record_id_str))
+
+        if INITIAL_RUN or needs_created_at_backfill:
+            mongo_query = {}
+        elif missing_organization_mongo_ids:
+            mongo_query = {
+                "$or": [
+                    default_cron_query,
+                    {"_id": {"$in": missing_organization_mongo_ids}},
+                ]
+            }
+            logger.info(
+                f"  [{table_name}] Backfilling organization_id for "
+                f"{missing_organization_record_count} PostgreSQL records."
+            )
+        else:
+            mongo_query = default_cron_query
         if needs_created_at_backfill:
             logger.info(f"  [{table_name}] Backfilling missing created_at values from all Mongo documents.")
         mongo_cursor = mongo_db["companyaccounts"].find(mongo_query)
@@ -1314,6 +1343,16 @@ def sync_company_accounts_custom(mongo_db, pg_conn, default_cron_query):
                 "company_email": doc.get("companyEmail"),
                 "company_phone1": doc.get("companyPhone1"),
                 "account_status": doc.get("accountStatus"),
+                "organization_id": to_str_id(
+                    doc.get("organizationId")
+                    or doc.get("OrganizationId")
+                    or doc.get("organization_id")
+                ),
+                "branch_id": to_str_id(
+                    doc.get("branchId")
+                    or doc.get("BranchId")
+                    or doc.get("branch_id")
+                ),
                 
                 # Compliance Fixes
                 "kyc_trade_license": trade_lic,
@@ -1855,7 +1894,7 @@ def run_migration(name, mongo_uri, mongo_db_name, pg_host, pg_port, pg_database,
                 "refresh_risk_dashboard_currency_breakdown()",
                 "refresh_party_cancellation_stats()",
                 "refresh_party_branch_org_balances()",
-                "refresh_extended_reporting_tables()"
+                "refresh_extended_reporting_tables()" 
             ]
 
             for fn in refresh_functions:
