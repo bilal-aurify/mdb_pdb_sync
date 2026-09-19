@@ -1759,6 +1759,41 @@ def sync_user_branch_roles(mongo_db, pg_conn):
         pg_cursor.close()
 
 
+def refresh_postgres_reports(pg_conn):
+    """Shared by the frequent fetch job and daily deletion job. Return success."""
+    refresh_functions = [
+        "refresh_ai_tables()", "refresh_ai_own_stock_position()",
+        "refresh_reg_tables()", "refresh_monthly_summary()",
+        "check_ml_retrain_needed()", "refresh_deal_strategy_tables()",
+        "refresh_inventory_view()", "refresh_risk_dashboard_currency_breakdown()",
+        "refresh_party_cancellation_stats()", "refresh_party_branch_org_balances()",
+        "refresh_extended_reporting_tables()",
+    ]
+    failed = False
+    try:
+        with pg_conn.cursor() as cursor:
+            logger.info("Truncating snapshot tables...")
+            cursor.execute('TRUNCATE TABLE "ai_stock_ledger" RESTART IDENTITY;')
+            cursor.execute('TRUNCATE TABLE "ai_user_permissions" RESTART IDENTITY;')
+            pg_conn.commit()
+            for fn in refresh_functions:
+                try:
+                    logger.info("Executing: SELECT %s;", fn)
+                    cursor.execute(f"SELECT {fn};")
+                    pg_conn.commit()
+                except Exception:
+                    pg_conn.rollback()
+                    failed = True
+                    logger.exception("Failed to execute %s", fn)
+    except Exception:
+        pg_conn.rollback()
+        failed = True
+        logger.exception("Post-sync database refresh functions FAILED")
+    if not failed:
+        logger.info("All AI analytics completed successfully.")
+    return not failed
+
+
 def run_migration(name, mongo_uri, mongo_db_name, pg_host, pg_port, pg_database,
                    pg_user, pg_password, initial_run=False, sync_window_minutes=None):
     """
@@ -1842,44 +1877,10 @@ def run_migration(name, mongo_uri, mongo_db_name, pg_host, pg_port, pg_database,
 
         logger.info("-" * 60)
         logger.info("Executing mandatory PostgreSQL refresh functions...")
-        try:
-            pg_cursor = pg_conn.cursor()
-            logger.info("Truncating snapshot tables...")
-            pg_cursor.execute('TRUNCATE TABLE "ai_stock_ledger" RESTART IDENTITY;')
-            pg_cursor.execute('TRUNCATE TABLE "ai_user_permissions" RESTART IDENTITY;')
-            pg_conn.commit()
-
-            refresh_functions = [
-                "refresh_ai_tables()",
-                "refresh_ai_own_stock_position()",
-                "refresh_reg_tables()",
-                "refresh_monthly_summary()",
-                "check_ml_retrain_needed()",
-                "refresh_deal_strategy_tables()",
-                "refresh_inventory_view()",
-                "refresh_risk_dashboard_currency_breakdown()",
-                "refresh_party_cancellation_stats()",
-                "refresh_party_branch_org_balances()",
-                "refresh_extended_reporting_tables()" 
-            ]
-
-            for fn in refresh_functions:
-                try:
-                    logger.info(f"Executing: SELECT {fn};")
-                    pg_cursor.execute(f"SELECT {fn};")
-                    pg_conn.commit()
-                except Exception as fn_err:
-                    pg_conn.rollback()
-                    logger.error(f"Failed to execute {fn}: {fn_err}")
-
-            pg_conn.commit()
-            pg_cursor.close()
-            logger.info("All AI analytics completed successfully.")
-        except Exception as e:
-            pg_conn.rollback()
-            logger.error(f"Post-sync database refresh functions FAILED: {e}")
-
-        logger.info("Migration completed successfully.")
+        if refresh_postgres_reports(pg_conn):
+            logger.info("Migration completed successfully.")
+        else:
+            logger.warning("Migration finished with report refresh errors; review the logs.")
 
     except Exception:
         logger.exception("Migration FAILED with an unexpected error.")
