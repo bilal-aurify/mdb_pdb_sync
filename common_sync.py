@@ -92,6 +92,14 @@ FIELD_NAME_OVERRIDES = {
         "division": "division_id",
         "divisionId": "division_id"
     },
+    "metal_rate_masters": {
+        "metal": "division_id",
+        "convertrate": "convert_rate",
+        "convertRate": "convert_rate",
+        "organizationId": "organization_id",
+        "OrganizationId": "organization_id",
+        "branchId": "branch_id"
+    },
     "accounts": {
         "vatStatus": "vat_status",
         "vatNumber": "vat_number",
@@ -727,6 +735,15 @@ def sync_collection(
                 raw_party_code = doc.get("partyCode") or doc.get("accountCode") or doc.get("party_code")
                 if raw_party_code:
                     row_data["party_code"] = str(raw_party_code)
+            
+            if pg_table_name == "journal_vouchers":
+                totals = doc.get("totals") or {}
+                if isinstance(totals, dict):
+                    for pg_col, m_key in (("total_cash_debit", "cashDebit"),
+                                        ("total_cash_credit", "cashCredit")):
+                        if pg_col in pg_columns_schema:
+                            row_data[pg_col] = clean_and_serialize(
+                                totals.get(m_key), pg_columns_schema[pg_col])
 
             if pg_table_name in ["entries", "inventory_logs"]:
                 raw_party = doc.get("party") or doc.get("partyId") or doc.get("customer") or doc.get("customerId") or doc.get("account")
@@ -740,6 +757,13 @@ def sync_collection(
                     first_order = fixing_orders[0] or {}
                     if isinstance(first_order, dict):
                         row_data["currency_code"] = first_order.get("currencyCode")
+            
+            if pg_table_name == "transaction_fixings" and "total_value" in pg_columns_schema:
+                fixing_orders = doc.get("orders") or []
+                if isinstance(fixing_orders, list):
+                    row_data["total_value"] = round(sum(
+                        float(o.get("price") or 0) for o in fixing_orders if isinstance(o, dict)
+                    ), 4)
             
             if pg_table_name == "contacts" and "country" in pg_columns_schema:
                 addr = doc.get("address") or {}
